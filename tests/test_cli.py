@@ -1,3 +1,5 @@
+import json
+
 from hardrail import cli
 from hardrail.engine import Outcome
 from hardrail.models import Category, Check, CheckResult, Severity, Status
@@ -47,4 +49,19 @@ def test_scan_prints_report(monkeypatch, capsys):
 
 def test_no_command_returns_two(capsys):
     assert cli.main([]) == 2
+
+
+def test_scan_json_output_is_valid_json(monkeypatch, capsys):
+    patch_engine(monkeypatch, [make_outcome(Status.PASS)])
+    exit_code = cli.main(["scan", "--format", "json"])
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+    assert exit_code == 0
+    assert data["checks"][0]["id"] == "T-001"
+    assert data["score"]["value"] == 100.0
+
+
+def test_scan_json_keeps_exit_code_on_fail(monkeypatch, capsys):
+    patch_engine(monkeypatch, [make_outcome(Status.FAIL)])
+    assert cli.main(["scan", "--format", "json"]) == 1
     

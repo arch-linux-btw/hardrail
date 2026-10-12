@@ -7,7 +7,7 @@ import sys
 from hardrail import __version__
 from hardrail.engine import is_root, run_checks
 from hardrail.models import Status
-from hardrail.report import format_report
+from hardrail.report import format_json, format_report
 
 
 def build_parser():
@@ -23,7 +23,13 @@ def build_parser():
 
     scan = subparsers.add_parser("scan", help="run all checks and print a report")
     scan.add_argument(
-        "--no-color", action="store_true", help="disable colored output"
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="output format (default: text)",
+    )
+    scan.add_argument(
+        "--no-color", action="store_true", help="disable colored output (text only)"
     )
 
     return parser
@@ -42,13 +48,16 @@ def cmd_scan(args):
     running_as_root = is_root()
     outcomes = run_checks(running_as_root=running_as_root)
 
-    report = format_report(
-        outcomes,
-        running_as_root=running_as_root,
-        version=__version__,
-        use_color=should_use_color(args.no_color),
-    )
-    print(report)
+    if args.format == "json":
+        print(format_json(outcomes, running_as_root, __version__))
+    else:
+        report = format_report(
+            outcomes,
+            running_as_root=running_as_root,
+            version=__version__,
+            use_color=should_use_color(args.no_color),
+        )
+        print(report)
 
     # Exit code: 0 = nothing wrong found, 1 = at least one FAIL or ERROR.
     exit_code = 0
