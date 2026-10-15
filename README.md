@@ -43,14 +43,40 @@ apply fixes).
 
 ## Requirements
 
-- Linux and Python 3.10 or newer
+**To install and run**
+
+- Linux and Python 3.10 or newer, with the `venv` module (on Debian/Ubuntu:
+  `sudo apt install python3-venv`)
+- Git, to clone the repository (or download the ZIP from GitHub)
+- Internet access during installation, to download the build tool
+  (`setuptools`)
 - Root privileges (`sudo`) for a complete scan. Without root, the checks that
   need it are reported as `SKIPPED`, never as `PASS`.
-- The package checks (`PKG-*`) support Debian and Ubuntu (`apt`, `dpkg`).
-  On other distributions they are reported as `SKIPPED`.
-- Tested on Ubuntu Server 24.04 (full scan) and on Arch Linux. On Arch the
-  package checks (`PKG-*`) are reported as `SKIPPED`, because it does not use
-  `apt`.
+
+**Python dependencies**
+
+hardrail has no runtime dependencies: it uses only the Python standard
+library. `pytest` is needed only for development (see
+[Development](#development)).
+
+**System tools used by the checks**
+
+hardrail calls these tools when they are present. If one is missing, the
+checks that need it are reported as `SKIPPED`.
+
+| Tool | Used by | Package on Debian/Ubuntu |
+|---|---|---|
+| `sshd` | SSH-001, SSH-002, SSH-003, SSH-005, SSH-006 | `openssh-server` |
+| `apt-get` | PKG-001 | `apt` |
+| `dpkg-query` | PKG-002, PKG-003 | `dpkg` |
+
+The package checks (`PKG-*`) support Debian and Ubuntu only. On other
+distributions they are reported as `SKIPPED`.
+
+**Tested on**
+
+Ubuntu Server 24.04 (full scan) and Arch Linux. On Arch the package checks
+(`PKG-*`) are reported as `SKIPPED`, because it does not use `apt`.
 
 ## Installation
 
