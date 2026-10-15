@@ -76,7 +76,7 @@ distributions they are reported as `SKIPPED`.
 **Tested on**
 
 Ubuntu Server 24.04 (full scan) and Arch Linux. On Arch the package checks
-(`PKG-*`) are reported as `SKIPPED`, because it does not use `apt`.
+(`PKG-*`) were reported as `SKIPPED`, because it does not use `apt`.
 
 ## Installation
 
@@ -248,8 +248,6 @@ hardrail was developed with the help of AI assistants:
 - Qwen3.5 9B (`qwen3.5:9b`), run locally through OpenCode: used briefly at
   the beginning of the project.
 
-The author ran and tested the result: the unit tests, plus scans on an
-Ubuntu Server 24.04 virtual machine and on Arch Linux.
 
 ## License
 
