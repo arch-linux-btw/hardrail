@@ -202,6 +202,16 @@ def test_evaluate_setid_fail():
     assert result.status == Status.FAIL
     assert "rootshell" in result.evidence
 
+def test_find_unexpected_setid_accepts_sudo_ws():
+    entries = [("/usr/bin/sudo.ws", 0o104755)]
+    assert find_unexpected_setid(entries, filesystem.EXPECTED_SETID) == []
+
+
+def test_find_unexpected_setid_still_flags_ntfs_3g():
+    entries = [("/usr/bin/ntfs-3g", 0o104755)]
+    findings = find_unexpected_setid(entries, filesystem.EXPECTED_SETID)
+    assert findings == ["/usr/bin/ntfs-3g (setuid)"]
+
 
 # FS-004 ------------------------------------------------------------------
 

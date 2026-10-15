@@ -171,6 +171,20 @@ def test_sudoers_check_skipped_when_file_missing(monkeypatch, tmp_path):
     result = identity.check_sudo_nopasswd()
     assert result.status == Status.SKIPPED
 
+def test_find_nopasswd_detects_defaults_authenticate():
+    rules = find_nopasswd_rules("Defaults !authenticate\n")
+    assert rules == ["Defaults !authenticate"]
+
+
+def test_find_nopasswd_detects_user_specific_defaults():
+    rules = find_nopasswd_rules("Defaults:alice   !authenticate\n")
+    assert len(rules) == 1
+
+
+def test_find_nopasswd_ignores_other_defaults():
+    text = 'Defaults env_reset\nDefaults secure_path="/usr/sbin:/usr/bin"\n'
+    assert find_nopasswd_rules(text) == []
+
 
 # USR-005 -----------------------------------------------------------------
 

@@ -11,6 +11,7 @@ SHADOW_PATH = "/etc/shadow"
 SUDOERS_PATH = "/etc/sudoers"
 SUDOERS_DIR = "/etc/sudoers.d"
 LOGIN_DEFS_PATH = "/etc/login.defs"
+NOPASSWD_PATTERN = re.compile(r"\bNOPASSWD\s*:|!\s*authenticate\b")
 
 SYSTEM_UID_LIMIT = 1000
 NON_LOGIN_SHELLS = ("nologin", "false", "sync", "shutdown", "halt")
@@ -180,13 +181,17 @@ def logical_lines(text):
 
 
 def find_nopasswd_rules(text):
-    """Return the sudoers rules (comments excluded) that use the NOPASSWD tag."""
+    """Return the sudoers rules (comments excluded) that skip the password prompt.
+
+    That means the NOPASSWD tag, or a 'Defaults !authenticate' setting
+    (also in its per-user form, 'Defaults:alice !authenticate').
+    """
     rules = []
     for line in logical_lines(text):
         stripped = line.strip()
         if stripped == "" or stripped.startswith("#"):
             continue
-        if re.search(r"\bNOPASSWD\s*:", stripped):
+        if NOPASSWD_PATTERN.search(stripped):
             rules.append(" ".join(stripped.split()))
     return rules
 
@@ -215,7 +220,7 @@ def read_sudoers_files():
 
 
 def evaluate_sudoers(files):
-    """PASS when none of the given sudoers files has a NOPASSWD rule."""
+    """PASS when no sudoers file has a rule that skips the password prompt."""
     findings = []
     for path, text in files:
         for rule in find_nopasswd_rules(text):
@@ -224,11 +229,12 @@ def evaluate_sudoers(files):
     if len(findings) == 0:
         return CheckResult(
             Status.PASS,
-            evidence="no NOPASSWD rules in " + str(len(files)) + " sudoers file(s)",
+            evidence="no rule skips the sudo password prompt in "
+            + str(len(files))
+            + " sudoers file(s)",
         )
     else:
         return CheckResult(Status.FAIL, evidence="; ".join(findings))
-
 
 def check_sudo_nopasswd():
     if not os.path.exists(SUDOERS_PATH):
@@ -356,15 +362,16 @@ CHECKS = [
     ),
     Check(
         id="USR-003",
-        title="No sudo rule uses NOPASSWD",
+        title="No sudo rule skips the password prompt",
         category=Category.IDENTITY,
         severity=Severity.HIGH,
         run=check_sudo_nopasswd,
         reference="Common sudo hardening guidance (require authentication)",
         requires_root=True,
         remediation=(
-            "Remove the NOPASSWD tag from the rule using 'visudo' (never edit "
-            "sudoers with a plain editor), unless the rule is strictly required."
+            "Remove the NOPASSWD tag (or the 'Defaults !authenticate' setting) "
+            "using 'visudo' (never edit sudoers with a plain editor), unless "
+            "the rule is strictly required."
         ),
     ),
     Check(

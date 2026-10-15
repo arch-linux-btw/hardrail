@@ -8,36 +8,49 @@ import os
 import re
 import shutil
 import subprocess
+import time
 
 from hardrail.models import Category, Check, CheckResult, Severity, Status
 
 APT_CONF_DIR = "/etc/apt/apt.conf.d"
+APT_STAMP_PATH = "/var/lib/apt/periodic/update-success-stamp"
+APT_LISTS_DIR = "/var/lib/apt/lists"
+MAX_CACHE_AGE_DAYS = 7
+SECONDS_PER_DAY = 86400
 MAX_LISTED = 10
 COMMAND_TIMEOUT = 60
 
-APT_SIMULATE_COMMAND = ["apt-get", "-s", "upgrade"]
+# dist-upgrade is only simulated (-s): nothing is installed. Unlike plain
+# "upgrade", it also lists updates that need new dependencies, such as new
+# kernel packages, which "upgrade" would hold back and hide.
+APT_SIMULATE_COMMAND = ["apt-get", "-s", "dist-upgrade"]
 DPKG_LIST_COMMAND = ["dpkg-query", "-W", "-f=${Package} ${db:Status-Abbrev}\\n"]
 
-# Packages that offer unencrypted or long obsolete network services.
+# Server packages that offer unencrypted or long obsolete network services.
+# Clients (telnet, rsh-client, ftp) are not listed on purpose.
 INSECURE_PACKAGES = [
+    # telnet and r-services servers
     "telnetd",
     "telnetd-ssl",
     "inetutils-telnetd",
     "rsh-server",
     "rsh-redone-server",
-    "rsh-client",
-    "nis",
-    "ypserv",
     "talkd",
+    # FTP and TFTP servers
+    "vsftpd",
+    "proftpd-basic",
+    "pure-ftpd",
+    "inetutils-ftpd",
     "tftpd",
     "tftpd-hpa",
+    # NIS
+    "nis",
+    "ypserv",
+    # super-servers that start those services
     "xinetd",
     "openbsd-inetd",
+    "inetutils-inetd",
 ]
-
-UNATTENDED_PATTERN = re.compile(
-    r'^\s*APT::Periodic::Unattended-Upgrade\s+"([^"]*)"', re.MULTILINE
-)
 
 
 class CommandError(Exception):
@@ -140,23 +153,62 @@ def parse_apt_upgrades(output):
     return upgrades
 
 
-def evaluate_security_updates(upgrades):
-    """PASS when no pending upgrade comes from a security repository."""
+def apt_cache_age_days():
+    """Return the age in days of the apt package lists, or None if unknown.
+
+    Uses the stamp apt writes after every successful 'apt update'. If the
+    stamp does not exist, falls back to the newest file in the lists
+    directory (the 'lock' file is ignored: it changes on every apt run).
+    """
+    newest = None
+
+    try:
+        newest = os.path.getmtime(APT_STAMP_PATH)
+    except OSError:
+        newest = None
+
+    if newest is None:
+        try:
+            names = os.listdir(APT_LISTS_DIR)
+        except OSError:
+            return None
+
+        for name in names:
+            if name == "lock":
+                continue
+            full_path = os.path.join(APT_LISTS_DIR, name)
+            if not os.path.isfile(full_path):
+                continue
+            try:
+                modified = os.path.getmtime(full_path)
+            except OSError:
+                continue
+            if newest is None:
+                newest = modified
+            elif modified > newest:
+                newest = modified
+
+    if newest is None:
+        return None
+
+    return (time.time() - newest) / SECONDS_PER_DAY
+
+
+def evaluate_security_updates(upgrades, cache_age_days):
+    """Judge the pending security updates.
+
+    - security updates found          -> FAIL (true whatever the cache age)
+    - none found, lists are recent    -> PASS
+    - none found, lists old or unknown -> SKIPPED: "nothing found" would be
+      a statement about an outdated view, so we do not claim a PASS.
+    """
     names = []
     for name, is_security in upgrades:
         if is_security:
             names.append(name)
     names.sort()
 
-    if len(names) == 0:
-        return CheckResult(
-            Status.PASS,
-            evidence=(
-                "no pending security updates in the local package cache "
-                "(run 'apt update' to refresh it)"
-            ),
-        )
-    else:
+    if len(names) > 0:
         return CheckResult(
             Status.FAIL,
             evidence=str(len(names))
@@ -164,13 +216,40 @@ def evaluate_security_updates(upgrades):
             + summarize_names(names),
         )
 
+    if cache_age_days is None:
+        return CheckResult(
+            Status.SKIPPED,
+            reason=(
+                "cannot tell how recent the apt package lists are; "
+                "run 'apt update' and scan again"
+            ),
+        )
+    elif cache_age_days > MAX_CACHE_AGE_DAYS:
+        return CheckResult(
+            Status.SKIPPED,
+            reason=(
+                "apt package lists are "
+                + str(round(cache_age_days, 1))
+                + " days old; run 'apt update' and scan again"
+            ),
+        )
+    else:
+        return CheckResult(
+            Status.PASS,
+            evidence=(
+                "no pending security updates (package lists are "
+                + str(round(cache_age_days, 1))
+                + " day(s) old)"
+            ),
+        )
+
 
 def check_security_updates():
-    return run_tool_check(
-        "apt-get",
-        APT_SIMULATE_COMMAND,
-        lambda output: evaluate_security_updates(parse_apt_upgrades(output)),
-    )
+    def evaluate(output):
+        upgrades = parse_apt_upgrades(output)
+        return evaluate_security_updates(upgrades, apt_cache_age_days())
+
+    return run_tool_check("apt-get", APT_SIMULATE_COMMAND, evaluate)
 
 
 # PKG-002 -----------------------------------------------------------------
@@ -218,11 +297,15 @@ def read_apt_conf_text():
     return "\n".join(texts)
 
 
-def parse_unattended_setting(text):
-    """Return the last value of APT::Periodic::Unattended-Upgrade, or None.
+def parse_apt_setting(text, key):
+    """Return the last value of 'APT::Periodic::<key> "<value>";', or None.
 
     Only the one-line form is recognised. Commented lines are ignored.
     """
+    pattern = re.compile(
+        r'^\s*APT::Periodic::' + re.escape(key) + r'\s+"([^"]*)"', re.MULTILINE
+    )
+
     lines = []
     for line in text.splitlines():
         stripped = line.strip()
@@ -230,21 +313,43 @@ def parse_unattended_setting(text):
             continue
         lines.append(line)
 
-    values = UNATTENDED_PATTERN.findall("\n".join(lines))
+    values = pattern.findall("\n".join(lines))
     if len(values) == 0:
         return None
     else:
         return values[-1]
 
 
-def evaluate_auto_updates(installed, setting):
-    """PASS when unattended-upgrades is installed and switched on."""
+def parse_unattended_setting(text):
+    """Return the value of APT::Periodic::Unattended-Upgrade, or None."""
+    return parse_apt_setting(text, "Unattended-Upgrade")
+
+
+def setting_is_on(value):
+    """True if a numeric apt setting is 1 or more, False if 0, None if not a number."""
+    try:
+        number = int(value)
+    except ValueError:
+        return None
+
+    if number >= 1:
+        return True
+    else:
+        return False
+
+
+def evaluate_auto_updates(installed, unattended, update_lists):
+    """PASS when unattended-upgrades is installed, on, and has fresh lists.
+
+    Without APT::Periodic::Update-Package-Lists the package lists are never
+    refreshed, so unattended-upgrades would have nothing to install.
+    """
     if "unattended-upgrades" not in installed:
         return CheckResult(
             Status.FAIL, evidence="the unattended-upgrades package is not installed"
         )
 
-    if setting is None:
+    if unattended is None:
         return CheckResult(
             Status.FAIL,
             evidence=(
@@ -254,24 +359,49 @@ def evaluate_auto_updates(installed, setting):
             ),
         )
 
-    try:
-        number = int(setting)
-    except ValueError:
+    unattended_on = setting_is_on(unattended)
+    if unattended_on is None:
         return CheckResult(
             Status.ERROR,
-            reason="unexpected APT::Periodic::Unattended-Upgrade value: " + setting,
+            reason="unexpected APT::Periodic::Unattended-Upgrade value: " + unattended,
         )
-
-    if number >= 1:
-        return CheckResult(
-            Status.PASS,
-            evidence='APT::Periodic::Unattended-Upgrade = "' + setting + '"',
-        )
-    else:
+    if not unattended_on:
         return CheckResult(
             Status.FAIL,
-            evidence='APT::Periodic::Unattended-Upgrade = "' + setting + '"',
+            evidence='APT::Periodic::Unattended-Upgrade = "' + unattended + '"',
         )
+
+    if update_lists is None:
+        return CheckResult(
+            Status.FAIL,
+            evidence=(
+                "APT::Periodic::Update-Package-Lists is not set: "
+                "package lists are never refreshed, so no update is installed"
+            ),
+        )
+
+    lists_on = setting_is_on(update_lists)
+    if lists_on is None:
+        return CheckResult(
+            Status.ERROR,
+            reason="unexpected APT::Periodic::Update-Package-Lists value: " + update_lists,
+        )
+    if not lists_on:
+        return CheckResult(
+            Status.FAIL,
+            evidence='APT::Periodic::Update-Package-Lists = "' + update_lists + '"',
+        )
+
+    return CheckResult(
+        Status.PASS,
+        evidence=(
+            'Unattended-Upgrade = "'
+            + unattended
+            + '", Update-Package-Lists = "'
+            + update_lists
+            + '"'
+        ),
+    )
 
 
 def check_auto_updates():
@@ -284,7 +414,11 @@ def check_auto_updates():
                 Status.ERROR,
                 reason="cannot read " + APT_CONF_DIR + ": " + str(error),
             )
-        return evaluate_auto_updates(installed, parse_unattended_setting(text))
+        return evaluate_auto_updates(
+            installed,
+            parse_apt_setting(text, "Unattended-Upgrade"),
+            parse_apt_setting(text, "Update-Package-Lists"),
+        )
 
     return run_tool_check("dpkg-query", DPKG_LIST_COMMAND, evaluate)
 
@@ -302,7 +436,8 @@ CHECKS = [
         requires_root=False,
         remediation=(
             "Run 'apt update' to refresh the package lists, then "
-            "'apt upgrade' to install the pending updates."
+            "'apt full-upgrade' to install the pending updates (a plain "
+            "'apt upgrade' can hold back kernel updates)."
         ),
     ),
     Check(
@@ -311,7 +446,7 @@ CHECKS = [
         category=Category.PACKAGES,
         severity=Severity.HIGH,
         run=check_insecure_packages,
-        reference="CIS Linux benchmark, services (remove telnet, rsh, NIS, tftp, xinetd)",
+        reference="CIS Linux benchmark, services (remove telnet, rsh, NIS, FTP, tftp, xinetd servers)",
         requires_root=False,
         remediation=(
             "Remove the package with 'apt remove <package>' unless a service "
@@ -328,7 +463,8 @@ CHECKS = [
         requires_root=False,
         remediation=(
             "Install the package with 'apt install unattended-upgrades', then "
-            "run 'dpkg-reconfigure -plow unattended-upgrades' to enable it."
+            "run 'dpkg-reconfigure -plow unattended-upgrades' to enable it "
+            "(this sets both Unattended-Upgrade and Update-Package-Lists)."
         ),
     ),
 ]

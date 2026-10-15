@@ -32,6 +32,7 @@ MAX_LISTED = 10
 EXPECTED_SETID = {
     "su",
     "sudo",
+    "sudo.ws",
     "passwd",
     "chsh",
     "chfn",
