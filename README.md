@@ -48,8 +48,6 @@ apply fixes).
 - Linux and Python 3.10 or newer, with the `venv` module (on Debian/Ubuntu:
   `sudo apt install python3-venv`)
 - Git, to clone the repository (or download the ZIP from GitHub)
-- Internet access during installation, to download the build tool
-  (`setuptools`)
 - Root privileges (`sudo`) for a complete scan. Without root, the checks that
   need it are reported as `SKIPPED`, never as `PASS`.
 
