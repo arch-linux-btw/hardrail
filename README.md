@@ -76,6 +76,12 @@ distributions they are reported as `SKIPPED`.
 Ubuntu Server 24.04 (full scan) and Arch Linux. On Arch the package checks
 (`PKG-*`) were reported as `SKIPPED`, because it does not use `apt`.
 
+Detailed test reports, with the results, the findings and the open points for
+each distribution, are in [`docs/distro-tests/`](docs/distro-tests/):
+
+- [Ubuntu Server](docs/distro-tests/ubuntu-server.md)
+- [Arch Linux](docs/distro-tests/arch-linux.md)
+
 ## Installation
 
 ```bash
